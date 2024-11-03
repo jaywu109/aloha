@@ -1,6 +1,7 @@
 import os
 
-from aloha.constants import JOINT_NAMES
+# from aloha.constants import JOINT_NAMES
+JOINT_NAMES = ['waist', 'shoulder', 'elbow', 'forearm_roll', 'wrist_angle', 'wrist_rotate']
 import cv2
 import fnmatch
 import h5py

@@ -1,16 +1,15 @@
 import argparse
-from copy import deepcopy
-from itertools import repeat
+import datetime
 import os
 import pickle
 import time
-import datetime
+from copy import deepcopy
+from itertools import repeat
 
 # from aloha.constants import FPS, FOLLOWER_GRIPPER_JOINT_OPEN, TASK_CONFIGS
 FPS = 50
 FOLLOWER_GRIPPER_JOINT_OPEN = 1.6214
 TASK_CONFIGS = {
-
     ### Template
     # 'aloha_template':{
     #     'dataset_dir': [
@@ -26,39 +25,29 @@ TASK_CONFIGS = {
     #     'episode_len': 1500,
     #     'camera_names': ['cam_high', 'cam_left_wrist', 'cam_right_wrist']
     # },
-
-    'aloha_test_move_water':{
-        'dataset_dir': "/tmp2/jaywu/aloha_data/aloha_test_move_water",
-        'episode_len': 600,
-        'camera_names': ['cam_high', 'cam_left_wrist', 'cam_right_wrist']
+    "aloha_test_move_water": {
+        "dataset_dir": "/tmp2/jaywu/aloha_data/aloha_test_move_water",
+        "episode_len": 600,
+        "camera_names": ["cam_high", "cam_left_wrist", "cam_right_wrist"],
     },
 }
 
-from einops import rearrange
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import wandb
+from detr.models.latent_model import Latent_Model_Transformer
+from einops import rearrange
+from policy import ACTPolicy, CNNMLPPolicy, DiffusionPolicy
 from torchvision import transforms
 from tqdm import tqdm
-import wandb
-
-from detr.models.latent_model import Latent_Model_Transformer
-from policy import (
-    ACTPolicy,
-    CNNMLPPolicy,
-    DiffusionPolicy
-)
-from utils import (
-    load_data,
-    compute_dict_mean,
-    set_seed,
-)
+from utils import compute_dict_mean, load_data, set_seed
 
 
 def get_auto_index(dataset_dir):
     max_idx = 1000
-    for i in range(max_idx+1):
-        if not os.path.isfile(os.path.join(dataset_dir, f'qpos_{i}.npy')):
+    for i in range(max_idx + 1):
+        if not os.path.isfile(os.path.join(dataset_dir, f"qpos_{i}.npy")):
             return i
     raise Exception(f"Error getting auto index, or more than {max_idx} episodes")
 
@@ -66,117 +55,117 @@ def get_auto_index(dataset_dir):
 def main(args):
     set_seed(1)
     # command line parameters
-    is_eval = args['eval']
-    ckpt_dir = args['ckpt_dir']
-    policy_class = args['policy_class']
-    onscreen_render = args['onscreen_render']
-    task_name = args['task_name']
-    batch_size_train = args['batch_size']
-    batch_size_val = args['batch_size']
-    num_steps = args['num_steps']
-    eval_every = args['eval_every']
-    validate_every = args['validate_every']
-    save_every = args['save_every']
-    resume_ckpt_path = args['resume_ckpt_path']
+    is_eval = args["eval"]
+    ckpt_dir = args["ckpt_dir"]
+    policy_class = args["policy_class"]
+    onscreen_render = args["onscreen_render"]
+    task_name = args["task_name"]
+    batch_size_train = args["batch_size"]
+    batch_size_val = args["batch_size"]
+    num_steps = args["num_steps"]
+    eval_every = args["eval_every"]
+    validate_every = args["validate_every"]
+    save_every = args["save_every"]
+    resume_ckpt_path = args["resume_ckpt_path"]
 
     # get task parameters
     task_config = TASK_CONFIGS[task_name]
-    dataset_dir = task_config['dataset_dir']
+    dataset_dir = task_config["dataset_dir"]
     # num_episodes = task_config['num_episodes']
-    episode_len = task_config['episode_len']
-    camera_names = task_config['camera_names']
-    stats_dir = task_config.get('stats_dir', None)
-    sample_weights = task_config.get('sample_weights', None)
-    train_ratio = task_config.get('train_ratio', 0.99)
-    name_filter = task_config.get('name_filter', lambda n: True)
+    episode_len = task_config["episode_len"]
+    camera_names = task_config["camera_names"]
+    stats_dir = task_config.get("stats_dir", None)
+    sample_weights = task_config.get("sample_weights", None)
+    train_ratio = task_config.get("train_ratio", 0.99)
+    name_filter = task_config.get("name_filter", lambda n: True)
 
     # fixed parameters
     state_dim = 14
     lr_backbone = 1e-5
-    backbone = 'resnet18'
-    if policy_class == 'ACT':
+    backbone = "resnet18"
+    if policy_class == "ACT":
         enc_layers = 4
         dec_layers = 7
         nheads = 8
         policy_config = {
-            'action_dim': 16,
-            'backbone': backbone,
-            'camera_names': camera_names,
-            'dec_layers': dec_layers,
-            'dim_feedforward': args['dim_feedforward'],
-            'enc_layers': enc_layers,
-            'hidden_dim': args['hidden_dim'],
-            'kl_weight': args['kl_weight'],
-            'lr_backbone': lr_backbone,
-            'lr': args['lr'],
-            'nheads': nheads,
-            'no_encoder': args['no_encoder'],
-            'num_queries': args['chunk_size'],
-            'vq_class': args['vq_class'],
-            'vq_dim': args['vq_dim'],
-            'vq': args['use_vq'],
+            "action_dim": 16,
+            "backbone": backbone,
+            "camera_names": camera_names,
+            "dec_layers": dec_layers,
+            "dim_feedforward": args["dim_feedforward"],
+            "enc_layers": enc_layers,
+            "hidden_dim": args["hidden_dim"],
+            "kl_weight": args["kl_weight"],
+            "lr_backbone": lr_backbone,
+            "lr": args["lr"],
+            "nheads": nheads,
+            "no_encoder": args["no_encoder"],
+            "num_queries": args["chunk_size"],
+            "vq_class": args["vq_class"],
+            "vq_dim": args["vq_dim"],
+            "vq": args["use_vq"],
         }
-    elif policy_class == 'Diffusion':
+    elif policy_class == "Diffusion":
         policy_config = {
-            'action_dim': 16,
-            'action_horizon': 8,
-            'camera_names': camera_names,
-            'ema_power': 0.75,
-            'lr': args['lr'],
-            'num_inference_timesteps': 10,
-            'num_queries': args['chunk_size'],
-            'observation_horizon': 1,
-            'prediction_horizon': args['chunk_size'],
-            'vq': False,
+            "action_dim": 16,
+            "action_horizon": 8,
+            "camera_names": camera_names,
+            "ema_power": 0.75,
+            "lr": args["lr"],
+            "num_inference_timesteps": 10,
+            "num_queries": args["chunk_size"],
+            "observation_horizon": 1,
+            "prediction_horizon": args["chunk_size"],
+            "vq": False,
         }
-    elif policy_class == 'CNNMLP':
+    elif policy_class == "CNNMLP":
         policy_config = {
-            'backbone' : backbone,
-            'camera_names': camera_names,
-            'lr_backbone': lr_backbone,
-            'lr': args['lr'],
-            'num_queries': 1,
+            "backbone": backbone,
+            "camera_names": camera_names,
+            "lr_backbone": lr_backbone,
+            "lr": args["lr"],
+            "num_queries": 1,
         }
     else:
         raise NotImplementedError
 
     actuator_config = {
-        'actuator_network_dir': args['actuator_network_dir'],
-        'history_len': args['history_len'],
-        'future_len': args['future_len'],
-        'prediction_len': args['prediction_len'],
+        "actuator_network_dir": args["actuator_network_dir"],
+        "history_len": args["history_len"],
+        "future_len": args["future_len"],
+        "prediction_len": args["prediction_len"],
     }
 
     config = {
-        'actuator_config': actuator_config,
-        'camera_names': camera_names,
-        'ckpt_dir': ckpt_dir,
-        'episode_len': episode_len,
-        'eval_every': eval_every,
-        'lr': args['lr'],
-        'num_steps': num_steps,
-        'onscreen_render': onscreen_render,
-        'policy_class': policy_class,
-        'policy_config': policy_config,
-        'real_robot': True,
-        'resume_ckpt_path': resume_ckpt_path,
-        'save_every': save_every,
-        'seed': args['seed'],
-        'state_dim': state_dim,
-        'task_name': task_name,
-        'temporal_agg': args['temporal_agg'],
-        'validate_every': validate_every,
+        "actuator_config": actuator_config,
+        "camera_names": camera_names,
+        "ckpt_dir": ckpt_dir,
+        "episode_len": episode_len,
+        "eval_every": eval_every,
+        "lr": args["lr"],
+        "num_steps": num_steps,
+        "onscreen_render": onscreen_render,
+        "policy_class": policy_class,
+        "policy_config": policy_config,
+        "real_robot": True,
+        "resume_ckpt_path": resume_ckpt_path,
+        "save_every": save_every,
+        "seed": args["seed"],
+        "state_dim": state_dim,
+        "task_name": task_name,
+        "temporal_agg": args["temporal_agg"],
+        "validate_every": validate_every,
     }
 
     if not os.path.isdir(ckpt_dir):
         os.makedirs(ckpt_dir)
-    config_path = os.path.join(ckpt_dir, 'config.pkl')
-    expr_name = ckpt_dir.split('/')[-1]
+    config_path = os.path.join(ckpt_dir, "config.pkl")
+    expr_name = ckpt_dir.split("/")[-1]
     if not is_eval:
         wandb_id = "{name}_{time}".format(
             name=expr_name,
             time=datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-        )      
+        )
         wandb.init(
             project="Aloha",
             id=wandb_id,
@@ -185,7 +174,7 @@ def main(args):
             name=expr_name,
         )
         wandb.config.update(config)
-    with open(config_path, 'wb') as f:
+    with open(config_path, "wb") as f:
         pickle.dump(config, f)
     # if is_eval:
     #     ckpt_names = ['policy_last.ckpt']
@@ -211,8 +200,8 @@ def main(args):
         camera_names,
         batch_size_train,
         batch_size_val,
-        args['chunk_size'],
-        args['skip_mirrored_data'],
+        args["chunk_size"],
+        args["skip_mirrored_data"],
         policy_class,
         stats_dir_l=stats_dir,
         sample_weights=sample_weights,
@@ -220,26 +209,26 @@ def main(args):
     )
 
     # save dataset stats
-    stats_path = os.path.join(ckpt_dir, 'dataset_stats.pkl')
-    with open(stats_path, 'wb') as f:
+    stats_path = os.path.join(ckpt_dir, "dataset_stats.pkl")
+    with open(stats_path, "wb") as f:
         pickle.dump(stats, f)
 
     best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
     best_step, min_val_loss, best_state_dict = best_ckpt_info
 
     # save best checkpoint
-    ckpt_path = os.path.join(ckpt_dir, 'policy_best.ckpt')
+    ckpt_path = os.path.join(ckpt_dir, "policy_best.ckpt")
     torch.save(best_state_dict, ckpt_path)
-    print(f'Best ckpt, val loss {min_val_loss:.6f} @ step{best_step}')
+    print(f"Best ckpt, val loss {min_val_loss:.6f} @ step{best_step}")
     wandb.finish()
 
 
 def make_policy(policy_class, policy_config):
-    if policy_class == 'ACT':
+    if policy_class == "ACT":
         policy = ACTPolicy(policy_config)
-    elif policy_class == 'CNNMLP':
+    elif policy_class == "CNNMLP":
         policy = CNNMLPPolicy(policy_config)
-    elif policy_class == 'Diffusion':
+    elif policy_class == "Diffusion":
         policy = DiffusionPolicy(policy_config)
     else:
         raise NotImplementedError
@@ -247,11 +236,11 @@ def make_policy(policy_class, policy_config):
 
 
 def make_optimizer(policy_class, policy):
-    if policy_class == 'ACT':
+    if policy_class == "ACT":
         optimizer = policy.configure_optimizers()
-    elif policy_class == 'CNNMLP':
+    elif policy_class == "CNNMLP":
         optimizer = policy.configure_optimizers()
-    elif policy_class == 'Diffusion':
+    elif policy_class == "Diffusion":
         optimizer = policy.configure_optimizers()
     else:
         raise NotImplementedError
@@ -261,17 +250,24 @@ def make_optimizer(policy_class, policy):
 def get_image(ts, camera_names, rand_crop_resize=False):
     curr_images = []
     for cam_name in camera_names:
-        curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
+        curr_image = rearrange(ts.observation["images"][cam_name], "h w c -> c h w")
         curr_images.append(curr_image)
     curr_image = np.stack(curr_images, axis=0)
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
 
     if rand_crop_resize:
-        print('rand crop resize is used!')
+        print("rand crop resize is used!")
         original_size = curr_image.shape[-2:]
         ratio = 0.95
-        curr_image = curr_image[..., int(original_size[0] * (1 - ratio) / 2): int(original_size[0] * (1 + ratio) / 2),
-                     int(original_size[1] * (1 - ratio) / 2): int(original_size[1] * (1 + ratio) / 2)]
+        curr_image = curr_image[
+            ...,
+            int(original_size[0] * (1 - ratio) / 2) : int(
+                original_size[0] * (1 + ratio) / 2
+            ),
+            int(original_size[1] * (1 - ratio) / 2) : int(
+                original_size[1] * (1 + ratio) / 2
+            ),
+        ]
         curr_image = curr_image.squeeze(0)
         resize_transform = transforms.Resize(original_size, antialias=True)
         curr_image = resize_transform(curr_image)
@@ -546,26 +542,40 @@ def forward_pass(data, policy):
     qpos_data = qpos_data.cuda()
     action_data = action_data.cuda()
     is_pad = is_pad.cuda()
-
+    # print("==forward_pass==")
+    # print("qpos_data.shape", qpos_data.shape)
+    # print("image_data.shape", image_data.shape)
+    # print("action_data.shape", action_data.shape)
+    # print("is_pad.shape", is_pad.shape)
+    # print("===============")
     return policy(qpos_data, image_data, action_data, is_pad)
 
 
-def train_bc(train_dataloader, val_dataloader, config):
-    num_steps = config['num_steps']
-    ckpt_dir = config['ckpt_dir']
-    seed = config['seed']
-    policy_class = config['policy_class']
-    policy_config = config['policy_config']
-    eval_every = config['eval_every']
-    validate_every = config['validate_every']
-    save_every = config['save_every']
+from torch.utils.data import DataLoader
+
+
+def train_bc(train_dataloader: DataLoader, val_dataloader, config):
+    num_steps = config["num_steps"]
+    ckpt_dir = config["ckpt_dir"]
+    seed = config["seed"]
+    policy_class = config["policy_class"]
+    policy_config = config["policy_config"]
+    eval_every = config["eval_every"]
+    validate_every = config["validate_every"]
+    save_every = config["save_every"]
 
     set_seed(seed)
-
+    if policy_class == "Diffusion":
+        data = next(iter(val_dataloader))
+        img = data[0][0]
+        img_shape = img.shape
+        policy_config["img_shape"] = img_shape[1:]
     policy = make_policy(policy_class, policy_config)
-    if config['resume_ckpt_path'] is not None:
-        loading_status = policy.deserialize(torch.load(config['resume_ckpt_path']))
-        print(f'Resume policy from: {config["resume_ckpt_path"]}, Status: {loading_status}')
+    if config["resume_ckpt_path"] is not None:
+        loading_status = policy.deserialize(torch.load(config["resume_ckpt_path"]))
+        print(
+            f'Resume policy from: {config["resume_ckpt_path"]}, Status: {loading_status}'
+        )
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
 
@@ -573,10 +583,10 @@ def train_bc(train_dataloader, val_dataloader, config):
     best_ckpt_info = None
 
     train_dataloader = repeater(train_dataloader)
-    for step in tqdm(range(num_steps+1)):
+    for step in tqdm(range(num_steps + 1)):
         # validation
         if step % validate_every == 0:
-            print('validating')
+            print("validating")
 
             with torch.inference_mode():
                 policy.eval()
@@ -589,17 +599,17 @@ def train_bc(train_dataloader, val_dataloader, config):
 
                 validation_summary = compute_dict_mean(validation_dicts)
 
-                epoch_val_loss = validation_summary['loss']
+                epoch_val_loss = validation_summary["loss"]
                 if epoch_val_loss < min_val_loss:
                     min_val_loss = epoch_val_loss
                     best_ckpt_info = (step, min_val_loss, deepcopy(policy.serialize()))
             for k in list(validation_summary.keys()):
-                validation_summary[f'val_{k}'] = validation_summary.pop(k)
+                validation_summary[f"val_{k}"] = validation_summary.pop(k)
             wandb.log(validation_summary, step=step)
-            print(f'Val loss:   {epoch_val_loss:.5f}')
-            summary_string = ''
+            print(f"Val loss:   {epoch_val_loss:.5f}")
+            summary_string = ""
             for k, v in validation_summary.items():
-                summary_string += f'{k}: {v.item():.3f} '
+                summary_string += f"{k}: {v.item():.3f} "
             print(summary_string)
 
         # # evaluation
@@ -617,22 +627,24 @@ def train_bc(train_dataloader, val_dataloader, config):
         data = next(train_dataloader)
         forward_dict = forward_pass(data, policy)
         # backward
-        loss = forward_dict['loss']
+        loss = forward_dict["loss"]
         loss.backward()
         optimizer.step()
-        wandb.log(forward_dict, step=step) # not great, make training 1-2% slower
+        wandb.log(forward_dict, step=step)  # not great, make training 1-2% slower
 
         if step % save_every == 0:
-            ckpt_path = os.path.join(ckpt_dir, f'policy_step_{step}_seed_{seed}.ckpt')
+            ckpt_path = os.path.join(ckpt_dir, f"policy_step_{step}_seed_{seed}.ckpt")
             torch.save(policy.serialize(), ckpt_path)
 
-    ckpt_path = os.path.join(ckpt_dir, 'policy_last.ckpt')
+    ckpt_path = os.path.join(ckpt_dir, "policy_last.ckpt")
     torch.save(policy.serialize(), ckpt_path)
 
     best_step, min_val_loss, best_state_dict = best_ckpt_info
-    ckpt_path = os.path.join(ckpt_dir, f'policy_step_{best_step}_seed_{seed}.ckpt')
+    ckpt_path = os.path.join(ckpt_dir, f"policy_step_{best_step}_seed_{seed}.ckpt")
     torch.save(best_state_dict, ckpt_path)
-    print(f'Training finished:\nSeed {seed}, val loss {min_val_loss:.6f} at step {best_step}')
+    print(
+        f"Training finished:\nSeed {seed}, val loss {min_val_loss:.6f} at step {best_step}"
+    )
 
     return best_ckpt_info
 
@@ -642,184 +654,176 @@ def repeater(data_loader):
     for loader in repeat(data_loader):
         for data in loader:
             yield data
-        print(f'Epoch {epoch} done')
+        print(f"Epoch {epoch} done")
         epoch += 1
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--eval',
-        action='store_true',
-        help='Evaluate the selected model checkpoint',
+        "--eval",
+        action="store_true",
+        help="Evaluate the selected model checkpoint",
     )
     parser.add_argument(
-        '--onscreen_render',
-        action='store_true',
-        help='Render training onscreen',
+        "--onscreen_render",
+        action="store_true",
+        help="Render training onscreen",
     )
     parser.add_argument(
-        '--ckpt_dir',
-        action='store',
+        "--ckpt_dir",
+        action="store",
         type=str,
-        help='Checkpoint directory',
+        help="Checkpoint directory",
         required=True,
     )
     parser.add_argument(
-        '--policy_class',
-        action='store',
+        "--policy_class",
+        action="store",
         type=str,
-        default='ACT',
-        help='The desired policy class',
-        choices=['ACT', 'Diffusion', 'CNNMLP'],
+        default="ACT",
+        help="The desired policy class",
+        choices=["ACT", "Diffusion", "CNNMLP"],
     )
     parser.add_argument(
-        '--task_name',
-        action='store',
+        "--task_name",
+        action="store",
         type=str,
-        help='Name of the task. Must be in task configurations',
-        required=True
+        help="Name of the task. Must be in task configurations",
+        required=True,
     )
     parser.add_argument(
-        '--batch_size',
-        action='store',
+        "--batch_size",
+        action="store",
         type=int,
-        help='Training batch size',
-        required=True
+        help="Training batch size",
+        required=True,
     )
     parser.add_argument(
-        '--seed',
-        action='store',
+        "--seed", action="store", type=int, help="Training seed", required=True
+    )
+    parser.add_argument(
+        "--num_steps",
+        action="store",
         type=int,
-        help='Training seed',
-        required=True
+        help="Number of training steps",
+        required=True,
     )
     parser.add_argument(
-        '--num_steps',
-        action='store',
-        type=int,
-        help='Number of training steps',
-        required=True
+        "--lr", action="store", type=float, help="Training learning rate", required=True
     )
     parser.add_argument(
-        '--lr',
-        action='store',
-        type=float,
-        help='Training learning rate',
-        required=True
-    )
-    parser.add_argument(
-        '--eval_every',
-        action='store',
+        "--eval_every",
+        action="store",
         type=int,
         default=500,
-        help='Number of steps between evaluations during training',
+        help="Number of steps between evaluations during training",
         required=False,
     )
     parser.add_argument(
-        '--validate_every',
-        action='store',
+        "--validate_every",
+        action="store",
         type=int,
         default=500,
-        help='Number of steps between validations during training',
+        help="Number of steps between validations during training",
         required=False,
     )
     parser.add_argument(
-        '--save_every',
-        action='store',
+        "--save_every",
+        action="store",
         type=int,
         default=500,
-        help='Number of steps between checkpoints during training',
+        help="Number of steps between checkpoints during training",
         required=False,
     )
     parser.add_argument(
-        '--resume_ckpt_path',
-        action='store',
+        "--resume_ckpt_path",
+        action="store",
         type=str,
-        help='Path to checkpoint to resume training from',
+        help="Path to checkpoint to resume training from",
         required=False,
     )
     parser.add_argument(
-        '--skip_mirrored_data',
-        action='store_true',
-        help='Skip mirrored data during training',
+        "--skip_mirrored_data",
+        action="store_true",
+        help="Skip mirrored data during training",
         required=False,
     )
     parser.add_argument(
-        '--actuator_network_dir',
-        action='store',
+        "--actuator_network_dir",
+        action="store",
         type=str,
-        help='actuator_network_dir',
+        help="actuator_network_dir",
         required=False,
     )
     parser.add_argument(
-        '--history_len',
-        action='store',
+        "--history_len",
+        action="store",
         type=int,
     )
     parser.add_argument(
-        '--future_len',
-        action='store',
+        "--future_len",
+        action="store",
         type=int,
     )
     parser.add_argument(
-        '--prediction_len',
-        action='store',
+        "--prediction_len",
+        action="store",
         type=int,
     )
 
     # for ACT
     parser.add_argument(
-        '--kl_weight',
-        action='store',
+        "--kl_weight",
+        action="store",
         type=int,
-        help='KL Weight',
+        help="KL Weight",
         required=False,
     )
     parser.add_argument(
-        '--chunk_size',
-        action='store',
+        "--chunk_size",
+        action="store",
         type=int,
-        help='chunk_size',
+        help="chunk_size",
         required=False,
     )
     parser.add_argument(
-        '--hidden_dim',
-        action='store',
+        "--hidden_dim",
+        action="store",
         type=int,
-        help='hidden_dim',
+        help="hidden_dim",
         required=False,
     )
     parser.add_argument(
-        '--dim_feedforward',
-        action='store',
+        "--dim_feedforward",
+        action="store",
         type=int,
-        help='dim_feedforward',
+        help="dim_feedforward",
         required=False,
     )
     parser.add_argument(
-        '--temporal_agg',
-        action='store_true',
+        "--temporal_agg",
+        action="store_true",
     )
     parser.add_argument(
-        '--use_vq',
-        action='store_true',
+        "--use_vq",
+        action="store_true",
     )
     parser.add_argument(
-        '--vq_class',
-        action='store',
+        "--vq_class",
+        action="store",
         type=int,
-        help='vq_class',
+        help="vq_class",
     )
     parser.add_argument(
-        '--vq_dim',
-        action='store',
+        "--vq_dim",
+        action="store",
         type=int,
-        help='vq_dim',
+        help="vq_dim",
     )
     parser.add_argument(
-        '--no_encoder',
-        action='store_true',
+        "--no_encoder",
+        action="store_true",
     )
 
     main(vars(parser.parse_args()))
